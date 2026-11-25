@@ -2,7 +2,7 @@
  * Mapas: OpenFreeMap (dados OpenStreetMap), sem chave de API.
  * Render: MapLibre GL JS + Three.js.  IA: MediaPipe (no próprio aparelho).
  */
-import { criarCamada3D } from './cena3d.js?v=5';
+import { criarCamada3D } from './cena3d.js?v=6';
 import { PercepcaoIA, TrafegoSimulado, NOMES } from './ia.js?v=5';
 
 (() => {
@@ -31,10 +31,12 @@ import { PercepcaoIA, TrafegoSimulado, NOMES } from './ia.js?v=5';
     const fundo = st.layers.findIndex((l) => l.type === 'background');
     st.layers.splice(fundo + 1, 0, {
       id: 'satelite', type: 'raster', source: 'satelite',
-      paint: { 'raster-saturation': 0.35, 'raster-contrast': 0.05, 'raster-brightness-min': 0.12 },
+      paint: { 'raster-saturation': 0.2, 'raster-contrast': 0.12, 'raster-resampling': 'linear', 'raster-fade-duration': 150 },
     });
     // A foto já mostra as ruas: tira as linhas de rua/ferrovia e deixa só os nomes.
     st.layers = st.layers.filter((l) => !(l.type === 'line' && ['transportation', 'aeroway'].includes(l['source-layer'])));
+    // Sem ícones de lojas e pontos de interesse: a foto fica limpa, só com nomes de ruas e bairros.
+    st.layers = st.layers.filter((l) => l['source-layer'] !== 'poi');
     for (const l of st.layers) {
       if (l.type === 'line') l.paint = { ...l.paint, 'line-opacity': 0.45 };
       if (l.type === 'symbol' && l.paint) l.paint = { ...l.paint, 'text-halo-color': 'rgba(0,0,0,0.75)', 'text-color': '#ffffff' };
@@ -122,7 +124,7 @@ import { PercepcaoIA, TrafegoSimulado, NOMES } from './ia.js?v=5';
         ],
         'fill-extrusion-height': ['interpolate', ['linear'], ['zoom'], 13, 0, 14.5, altura],
         'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
-        'fill-extrusion-opacity': state.tema === 'satelite' ? 0.62 : noite ? 0.78 : 0.72,
+        'fill-extrusion-opacity': state.tema === 'satelite' ? 0.3 : noite ? 0.78 : 0.72,
         'fill-extrusion-vertical-gradient': true,
       },
     }, primeiroTexto);
@@ -155,7 +157,8 @@ import { PercepcaoIA, TrafegoSimulado, NOMES } from './ia.js?v=5';
   }
 
   // ---------- Carro e objetos em 3D ----------
-  const cena = criarCamada3D(() => ({ pos: state.pos, bearing: state.bearing }));
+  // No satélite a câmera fica mais longe, então os objetos são desenhados maiores para continuar legíveis.
+  const cena = criarCamada3D(() => ({ pos: state.pos, bearing: state.bearing, escala: state.tema === 'satelite' ? 1.7 : 1 }));
   window.mapa3d = { map, state, cena }; // útil para depurar no console
 
   // ---------- Utilidades geo ----------
@@ -181,12 +184,17 @@ import { PercepcaoIA, TrafegoSimulado, NOMES } from './ia.js?v=5';
   const lerp = (a, b, t) => a + (b - a) * t;
 
   // Câmera bem perto do carro (estilo "Reality View"); afasta conforme a velocidade.
+  // No satélite a câmera fica um pouco mais longe: a foto da Esri só tem detalhe até o
+  // nível 19, e chegar mais perto que isso só amplia os pixels (imagem turva).
   function zoomPorVelocidade(kmh) {
-    if (kmh < 15) return 20;
-    if (kmh < 40) return 19.7;
-    if (kmh < 70) return 19.2;
-    return 18.6;
+    const sat = state.tema === 'satelite';
+    if (kmh < 15) return sat ? 18.3 : 20;
+    if (kmh < 40) return sat ? 18.1 : 19.7;
+    if (kmh < 70) return sat ? 17.8 : 19.2;
+    return sat ? 17.4 : 18.6;
   }
+  // Inclinação da câmera: menor no satélite para mostrar mais foto nítida perto do carro.
+  const pitch3d = () => (state.tema === 'satelite' ? 62 : PITCH_3D);
 
   // ---------- Nova posição (GPS ou simulação) ----------
   function novaPosicao({ lng, lat, speed, heading, accuracy, altitude, t }) {
@@ -213,7 +221,7 @@ import { PercepcaoIA, TrafegoSimulado, NOMES } from './ia.js?v=5';
       state.pos = p;
       state.bearing = state.heading;
       state.zoom = state.zoomAlvo;
-      map.jumpTo({ center: p, zoom: state.zoom, pitch: state.is3d ? PITCH_3D : 0 });
+      map.jumpTo({ center: p, zoom: state.zoom, pitch: state.is3d ? pitch3d() : 0 });
     }
 
     kmh = Math.max(0, kmh || 0);
@@ -447,7 +455,7 @@ ${pts}
   $('btn3d').onclick = () => {
     state.is3d = !state.is3d;
     $('btn3d').textContent = state.is3d ? '2D' : '3D';
-    map.easeTo({ pitch: state.is3d ? PITCH_3D : 0, duration: 800 });
+    map.easeTo({ pitch: state.is3d ? pitch3d() : 0, duration: 800 });
   };
   async function setTema(tema) {
     state.tema = tema;
@@ -458,6 +466,11 @@ ${pts}
       try { estilo = await estiloSatelite(); } catch (_) { estilo = STYLES.dia; }
     }
     map.setStyle(estilo, { diff: false });
+    if (state.lastFix) {
+      const kmh = state.vmax ? parseFloat($('spd').textContent) || 0 : 0;
+      state.zoomAlvo = zoomPorVelocidade(kmh);
+    }
+    if (state.is3d) map.easeTo({ pitch: pitch3d(), duration: 600 });
   }
   // Satélite → claro → noturno → satélite…
   $('btnTheme').onclick = () => setTema(TEMAS[(TEMAS.indexOf(state.tema) + 1) % TEMAS.length]);

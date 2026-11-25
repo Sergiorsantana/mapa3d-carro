@@ -193,6 +193,7 @@ export function criarCamada3D(getEgo) {
   ego.add(semCulling(anel));
 
   const malhas = new Map(); // id -> {obj, x, z}
+  let escalaModelos = 1; // aumenta os modelos quando a câmera está mais longe
   let objetos = [];
 
   const layer = {
@@ -217,6 +218,9 @@ export function criarCamada3D(getEgo) {
       this.camera.projectionMatrix = new THREE.Matrix4().fromArray(matrix).multiply(local);
 
       ego.rotation.y = -(e.bearing * Math.PI) / 180;
+      escalaModelos = e.escala || 1;
+      meuCarro.scale.setScalar(escalaModelos);
+      anel.scale.setScalar(escalaModelos);
       atualizarMalhas();
       anel.material.opacity = 0.35 + Math.sin(performance.now() / 400) * 0.2;
 
@@ -254,7 +258,7 @@ export function criarCamada3D(getEgo) {
       m.z += (o.z - m.z) * 0.2;
       m.escala += (1 - m.escala) * 0.15;
       m.obj.position.set(m.x, 0, -m.z);
-      m.obj.scale.setScalar(m.escala);
+      m.obj.scale.setScalar(m.escala * escalaModelos);
       const tinta = m.obj.userData.pintura;
       if (tinta) {
         // Cor real vinda da câmera pode ir se ajustando
