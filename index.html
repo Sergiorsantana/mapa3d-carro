@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1220" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Mapa 3D no Carro</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+  <link rel="stylesheet" href="style.css?v=5" />
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- Painel de velocidade e dados -->
+  <div id="hud" class="hidden">
+    <div class="speed">
+      <span id="spd">0</span>
+      <small>km/h</small>
+    </div>
+    <div class="stats">
+      <div><label>Distância</label><b id="dist">0,00 km</b></div>
+      <div><label>Tempo</label><b id="time">00:00</b></div>
+      <div><label>Máx.</label><b id="vmax">0 km/h</b></div>
+      <div><label>Precisão</label><b id="acc">–</b></div>
+    </div>
+    <div id="status" class="status">Aguardando GPS…</div>
+    <div class="ia-linha"><span id="luz" class="luz hidden"></span><span id="ia">IA</span></div>
+  </div>
+
+  <!-- Miniatura da câmera com as detecções da IA -->
+  <div id="cam" class="hidden">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <!-- Botões -->
+  <div id="controls" class="hidden">
+    <button id="btnCenter" title="Seguir o carro">◎</button>
+    <button id="btnCam" title="Câmera / IA">📷</button>
+    <button id="btn3d" title="Alternar 2D/3D">2D</button>
+    <button id="btnTheme" title="Dia / Noite">☾</button>
+    <button id="btnGpx" title="Exportar trajeto (GPX)">⤓</button>
+    <button id="btnFull" title="Tela cheia">⛶</button>
+  </div>
+
+  <!-- Tela inicial -->
+  <div id="start">
+    <div class="card">
+      <h1>Mapa 3D <span>no Carro</span></h1>
+      <p>Reconstrói em 3D o trânsito ao seu redor — carros, ônibus, motos, pessoas e semáforos — usando a câmera do celular com IA, sobre o mapa 3D da cidade em tempo real.</p>
+      <button id="btnIa" class="primary">Iniciar: GPS + Câmera com IA</button>
+      <button id="btnGps" class="ghost">Só GPS (sem câmera)</button>
+      <button id="btnDemo" class="ghost">Modo demonstração</button>
+      <p class="note">📱 Prenda o celular no para-brisa, deitado, com a câmera traseira olhando para a rua.<br>⚠️ Não mexa no celular enquanto dirige. Use um suporte e deixe o app rodando.</p>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script type="module" src="app.js?v=8"></script>
+</body>
+</html>
