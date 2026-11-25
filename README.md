@@ -17,13 +17,24 @@ Funciona no navegador do celular (Android e iPhone). Não precisa instalar nada 
 ## Funcionalidades
 
 ### IA na câmera
-- **Detecção de objetos no próprio celular** (MediaPipe / EfficientDet-Lite0): carros, caminhões, ônibus, motos, bicicletas, pessoas e semáforos. Nenhuma imagem sai do aparelho.
+- **Detecção de objetos no próprio celular** (MediaPipe / EfficientDet): carros, caminhões, ônibus, motos, bicicletas, pessoas e semáforos. Nenhuma imagem sai do aparelho.
 - **Estimativa de distância e posição** de cada objeto pela geometria da câmera (tamanho conhecido do objeto + posição em relação ao horizonte)
 - **Rastreamento** entre quadros, para os objetos não piscarem
 - **Cena 3D (Three.js)**: modelos 3D de cada objeto em volta do seu carro. O carro da frente na mesma faixa fica destacado em azul.
 - **Cor real dos veículos**: a IA lê a cor da lataria na câmera e pinta o modelo 3D com ela
 - **Cor do semáforo** (vermelho, amarelo ou verde) lida da imagem e mostrada no painel
 - **Miniatura da câmera** com as caixas de detecção e a distância em metros
+- **Dois modelos de IA**: *Rápido* (EfficientDet-Lite0) ou *Preciso* (EfficientDet-Lite2, erra menos com motos, bikes e objetos distantes)
+- **Calibração da câmera**: o horizonte é corrigido sozinho pela inclinação do celular (acelerômetro), com ajuste fino, altura e campo de visão no painel ⚙
+- **Economia de bateria**: a IA desacelera com o carro parado, com bateria baixa ou quando o celular fica lento/quente
+
+### Direção
+- **Aviso de distância do carro da frente**: mostra metros e segundos até ele e bipa quando fica perigoso
+- **Navegação**: busque um destino (🧭), a rota é desenhada no mapa com instruções curva a curva, voz em português e recálculo automático se você sair do caminho
+- **Limite de velocidade da via** (placa ao lado da velocidade) com alerta ao passar do limite. Quando o OpenStreetMap não tem o dado, mostra um limite **estimado** em cinza pelo tipo de via (CTB), sem alerta
+- **Faixas da rua** desenhadas no chão, acompanhando as curvas (número de faixas estimado pelo tipo de via)
+- **Dashcam** (⏺): grava um vídeo da viagem com o mapa 3D, a câmera com a IA, a velocidade, a data e a hora
+- **Histórico de viagens** (📊): cada viagem é salva sozinha no aparelho, com km, tempo, velocidade média e máxima; dá para ver no mapa, exportar em GPX ou apagar
 
 ### Mapa
 
@@ -43,13 +54,9 @@ Funciona no navegador do celular (Android e iPhone). Não precisa instalar nada 
 
 1. Prenda o celular no para-brisa, **deitado (horizontal)**, com a câmera traseira olhando para a rua e o aparelho bem nivelado.
 2. Abra o app e toque em **Iniciar: GPS + Câmera com IA**. Permita a câmera e a localização.
-3. Se as distâncias parecerem erradas, ajuste o início do arquivo `ia.js`:
-   ```js
-   export const CONFIG = {
-     campoDeVisao: 66,    // graus da câmera no lado maior da imagem
-     alturaCamera: 1.25,  // altura do celular em relação ao chão (m)
-   };
-   ```
+3. **Calibre** em ⚙ → *Calibração da câmera*: com a câmera aberta (📷), deixe a linha azul tracejada na altura do fim da rua, lá longe, e informe a altura do celular em relação ao chão. Os ajustes ficam salvos no aparelho.
+
+> ⚠️ Os avisos (distância, limite de velocidade) são **só um auxílio**. A distância vem de uma única câmera e é aproximada. Continue sempre atento ao trânsito.
 
 ### Limitações (sendo honesto)
 O Tesla Reality View usa 8 câmeras e uma rede neural de cerca de 1 bilhão de parâmetros. Este app usa **uma câmera** e um modelo leve que roda no navegador. Por isso:
@@ -88,17 +95,30 @@ Abra `http://localhost:8765` e toque em **Modo demonstração**. Um carro virtua
 | Botão | Função |
 |---|---|
 | ◎ | Volta a seguir o carro (depois de arrastar o mapa) |
+| 🧭 | Navegar até um destino |
 | 📷 | Mostra/esconde a câmera com as detecções da IA |
+| ⏺ | Grava a viagem em vídeo (dashcam) |
 | 2D / 3D | Alterna entre visão inclinada e vista de cima |
 | 🛰 / ☀ / ☾ | Troca o visual: satélite → mapa claro → noturno |
-| ⤓ | Baixa o trajeto em GPX |
+| 📊 | Histórico de viagens |
+| ⚙ | Ajustes, calibração e avisos |
+| ⤓ | Baixa o trajeto atual em GPX |
 | ⛶ | Tela cheia |
+
+## Privacidade
+
+- As imagens da câmera **não saem do celular**: a IA roda no próprio aparelho.
+- Histórico de viagens, ajustes e vídeos da dashcam ficam **só no aparelho**.
+- A busca de destino envia o texto buscado e a sua posição ao Nominatim e ao OSRM; o limite de velocidade consulta o Overpass com a posição. São serviços públicos do ecossistema OpenStreetMap.
 
 ## Tecnologias
 
 - [MapLibre GL JS](https://maplibre.org/) — renderização 3D do mapa (WebGL)
 - [Three.js](https://threejs.org/) — modelos 3D dos veículos e pessoas
 - [MediaPipe Object Detector](https://ai.google.dev/edge/mediapipe/solutions/vision/object_detector) — IA de detecção no navegador
+- [OSRM](https://project-osrm.org/) — cálculo de rotas
+- [Nominatim](https://nominatim.org/) — busca de endereços (OpenStreetMap)
+- [Overpass API](https://overpass-api.de/) — limite de velocidade das vias (OpenStreetMap)
 - [OpenFreeMap](https://openfreemap.org/) — mapas gratuitos, sem chave
 - [Esri World Imagery](https://www.arcgis.com/home/item.html?id=10df2279f9684e4a9f6a7f08febac2a9) — imagens de satélite (Esri, Maxar, Earthstar Geographics)
 - Dados © [colaboradores do OpenStreetMap](https://www.openstreetmap.org/copyright)

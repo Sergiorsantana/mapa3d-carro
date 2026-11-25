@@ -3,7 +3,15 @@
  * Render: MapLibre GL JS + Three.js.  IA: MediaPipe (no próprio aparelho).
  */
 import { criarCamada3D } from './cena3d.js?v=6';
-import { PercepcaoIA, TrafegoSimulado, NOMES } from './ia.js?v=5';
+import { PercepcaoIA, TrafegoSimulado, NOMES } from './ia.js?v=7';
+import { AJUSTES, salvar, aoMudar, restaurarPadrao } from './ajustes.js?v=1';
+import { INCLINACAO, iniciarSensores } from './sensores.js?v=1';
+import { adicionarFaixas, mostrarFaixas } from './faixas.js?v=2';
+import { AvisoDistancia, liberarSom, bipe } from './aviso.js?v=1';
+import { Navegacao } from './navegacao.js?v=1';
+import { LimiteVelocidade, classeDaVia } from './limite.js?v=1';
+import { Dashcam } from './dashcam.js?v=1';
+import { salvarViagem, listarViagens, apagarViagem, simplificar, gpxDaViagem } from './historico.js?v=1';
 
 (() => {
   'use strict';
@@ -66,6 +74,8 @@ import { PercepcaoIA, TrafegoSimulado, NOMES } from './ia.js?v=5';
     inicio: null,
     wakeLock: null,
     percepcao: null,    // PercepcaoIA ou TrafegoSimulado
+    vel: 0,             // velocidade atual (m/s)
+    modo: null,         // 'ia' | 'gps' | 'demo'
   };
 
   // ---------- Mapa ----------
@@ -78,12 +88,17 @@ import { PercepcaoIA, TrafegoSimulado, NOMES } from './ia.js?v=5';
     bearing: -20,
     maxPitch: 85,
     antialias: true,
+    preserveDrawingBuffer: true, // permite gravar a tela (dashcam)
     attributionControl: { compact: true },
   });
 
   map.on('style.load', () => {
     adicionarPredios3D();
+    const lat = (state.pos || START)[1];
+    adicionarFaixas(map, fonteVetorial(), lat, AJUSTES.faixas);
     adicionarTrilha();
+    navegacao.desenhar();
+    if (viagemVista) mostrarViagem(viagemVista);
     if (!map.getLayer(cena.layer.id)) map.addLayer(cena.layer);
   });
 
@@ -159,7 +174,16 @@ import { PercepcaoIA, TrafegoSimulado, NOMES } from './ia.js?v=5';
   // ---------- Carro e objetos em 3D ----------
   // No satélite a câmera fica mais longe, então os objetos são desenhados maiores para continuar legíveis.
   const cena = criarCamada3D(() => ({ pos: state.pos, bearing: state.bearing, escala: state.tema === 'satelite' ? 1.7 : 1 }));
-  window.mapa3d = { map, state, cena }; // útil para depurar no console
+  const navegacao = new Navegacao(map, { banner: document.getElementById('banner') });
+  const limite = new LimiteVelocidade();
+  const aviso = new AvisoDistancia(document.getElementById('aviso'));
+  const dashcam = new Dashcam(map, {
+    video: document.getElementById('video'),
+    overlay: document.getElementById('overlay'),
+    painel: () => ({ vel: document.getElementById('spd').textContent, info: 'Mapa 3D no Carro · ' + (document.getElementById('ia').textContent || '') }),
+  });
+  let viagemVista = null; // viagem do histórico mostrada no mapa
+  window.mapa3d = { map, state, cena, navegacao, limite }; // útil para depurar no console
 
   // ---------- Utilidades geo ----------
   const R = 6371000;
@@ -225,7 +249,8 @@ import { PercepcaoIA, TrafegoSimulado, NOMES } from './ia.js?v=5';
     }
 
     kmh = Math.max(0, kmh || 0);
-    if (state.percepcao instanceof TrafegoSimulado) state.percepcao.velocidade = kmh / 3.6;
+    state.vel = kmh / 3.6;
+    if (state.percepcao) state.percepcao.velocidade = state.vel;
     state.vmax = Math.max(state.vmax, kmh);
     if (state.autoZoom) state.zoomAlvo = zoomPorVelocidade(kmh);
 
@@ -235,6 +260,32 @@ import { PercepcaoIA, TrafegoSimulado, NOMES } from './ia.js?v=5';
     state.lastFix = { lng, lat, t: agora };
 
     atualizarHUD(kmh, accuracy);
+    navegacao.atualizar(p);
+    atualizarLimite(p, kmh);
+  }
+
+  // ---------- Limite de velocidade ----------
+  let ultimoLimite = 0, acimaAntes = false;
+  async function atualizarLimite(p, kmh) {
+    const agora = Date.now();
+    if (agora - ultimoLimite > 2000) {
+      ultimoLimite = agora;
+      const classe = classeDaVia(map, fonteVetorial(), p[0], p[1]);
+      await limite.atualizar(p[0], p[1], classe);
+    }
+    const l = limite.limite;
+    const placa = $('placa');
+    placa.classList.toggle('hidden', !l);
+    if (!l) { $('hud').querySelector('.speed').classList.remove('acima'); return; }
+    $('limiteVal').textContent = l.kmh;
+    placa.classList.toggle('estimado', l.estimado);
+    placa.title = l.estimado ? `Limite estimado pelo tipo de via (${l.kmh} km/h)` : `Limite da via: ${l.kmh} km/h`;
+    // Alerta só com limite real da via (não com o estimado), com 5 km/h de tolerância
+    const acima = !l.estimado && AJUSTES.avisoVelocidade && kmh > l.kmh + 5;
+    placa.classList.toggle('acima', acima);
+    $('hud').querySelector('.speed').classList.toggle('acima', acima);
+    if (acima && !acimaAntes) bipe(600, 0.25, 2);
+    acimaAntes = acima;
   }
 
   // ---------- Loop de animação ----------
@@ -247,7 +298,7 @@ import { PercepcaoIA, TrafegoSimulado, NOMES } from './ia.js?v=5';
     if (state.percepcao) {
       const objs = state.percepcao.objetos();
       cena.setObjetos(objs);
-      if (now - ultimoHudIA > 500) { ultimoHudIA = now; hudIA(objs); }
+      if (now - ultimoHudIA > 250) { ultimoHudIA = now; hudIA(objs); aviso.atualizar(objs, state.vel); }
     }
     const a = state.anim;
     if (a) {
@@ -295,7 +346,9 @@ import { PercepcaoIA, TrafegoSimulado, NOMES } from './ia.js?v=5';
     }
     const partes = Object.entries(cont).filter(([t]) => t !== 'semaforo').map(([t, n]) => `${n} ${NOMES[t].toLowerCase()}${n > 1 ? 's' : ''}`);
     const fps = state.percepcao.fps ? ` · ${Math.round(state.percepcao.fps)} fps` : '';
-    $('ia').textContent = (partes.join(' · ') || 'Nada detectado') + fps;
+    const ECO = { parado: 'economia: parado', bateria: 'economia: bateria baixa', lento: 'economia: celular lento' };
+    const eco = ECO[state.percepcao.modo] ? ` · ${ECO[state.percepcao.modo]}` : '';
+    $('ia').textContent = (partes.join(' · ') || 'Nada detectado') + fps + eco;
     const luz = $('luz');
     luz.className = 'luz ' + (sem?.cor || '');
     luz.classList.toggle('hidden', !sem);
@@ -428,6 +481,10 @@ ${pts}
   }
 
   function comecar(modo) {
+    state.modo = modo;
+    liberarSom();          // som precisa de um toque do usuário
+    iniciarSensores();     // inclinação do celular (calibração automática do horizonte)
+    setInterval(guardarViagem, 20000);
     $('start').classList.add('hidden');
     $('hud').classList.remove('hidden');
     $('controls').classList.remove('hidden');
@@ -479,6 +536,238 @@ ${pts}
     if (document.fullscreenElement) document.exitFullscreen();
     else document.documentElement.requestFullscreen?.();
   };
+
+  // ---------- Painel lateral ----------
+  function abrirPainel(titulo, corpo) {
+    $('painelTitulo').textContent = titulo;
+    const c = $('painelCorpo');
+    c.innerHTML = '';
+    c.append(corpo);
+    $('painel').classList.remove('hidden');
+  }
+  const fecharPainel = () => $('painel').classList.add('hidden');
+  $('painelFechar').onclick = fecharPainel;
+  $('painel').onclick = (e) => { if (e.target.id === 'painel') fecharPainel(); };
+  function el(html) {
+    const t = document.createElement('template');
+    t.innerHTML = html.trim();
+    return t.content;
+  }
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  // ---------- Ajustes e calibração ----------
+  function painelAjustes() {
+    const f = el(`
+      <h3>Calibração da câmera</h3>
+      <p class="dica">Abra a câmera (📷) e deixe a <b style="color:#00e5ff">linha azul tracejada</b> na altura do fim da rua, lá longe.
+      Isso deixa a distância dos carros mais precisa.</p>
+      <label class="chave">Corrigir pela inclinação do celular (sensor)<input type="checkbox" data-k="sensorInclinacao"></label>
+      <p class="dica" id="leituraSensor"></p>
+      <div class="campo"><label>Ajuste fino do horizonte <b data-v="horizonteManual"></b></label>
+        <input type="range" min="-25" max="25" step="0.5" data-k="horizonteManual"></div>
+      <div class="campo"><label>Altura do celular em relação ao chão <b data-v="alturaCamera"></b></label>
+        <input type="range" min="0.8" max="2.2" step="0.05" data-k="alturaCamera"></div>
+      <div class="campo"><label>Campo de visão da câmera <b data-v="campoDeVisao"></b></label>
+        <input type="range" min="45" max="100" step="1" data-k="campoDeVisao"></div>
+      <h3>Inteligência artificial</h3>
+      <div class="campo"><label>Modelo de detecção</label>
+        <select data-k="modeloIA">
+          <option value="rapido">Rápido (EfficientDet-Lite0, 4 MB)</option>
+          <option value="preciso">Preciso (EfficientDet-Lite2, 12 MB — erra menos, gasta mais bateria)</option>
+        </select></div>
+      <label class="chave">Economia de bateria (reduz a IA parado, com bateria baixa ou celular lento/quente)<input type="checkbox" data-k="economia"></label>
+      <h3>Avisos</h3>
+      <label class="chave">Bipe de distância do carro da frente<input type="checkbox" data-k="somAviso"></label>
+      <label class="chave">Alerta acima do limite de velocidade<input type="checkbox" data-k="avisoVelocidade"></label>
+      <label class="chave">Voz da navegação<input type="checkbox" data-k="vozNavegacao"></label>
+      <label class="chave">Mostrar faixas da rua<input type="checkbox" data-k="faixas"></label>
+      <p class="dica">⚠️ Os avisos são só um auxílio: a distância vem de uma câmera só e é aproximada. Continue sempre atento ao trânsito.</p>
+      <button class="btn perigo" id="ajPadrao">Restaurar padrão</button>`);
+    const formatar = {
+      horizonteManual: (v) => (v > 0 ? '+' : '') + v + '%',
+      alturaCamera: (v) => (+v).toFixed(2).replace('.', ',') + ' m',
+      campoDeVisao: (v) => v + '°',
+    };
+    const preencher = (raiz) => {
+      raiz.querySelectorAll('[data-k]').forEach((inp) => {
+        const k = inp.dataset.k;
+        if (inp.type === 'checkbox') inp.checked = !!AJUSTES[k]; else inp.value = AJUSTES[k];
+        const out = raiz.querySelector(`[data-v="${k}"]`);
+        if (out) out.textContent = formatar[k](AJUSTES[k]);
+      });
+    };
+    preencher(f);
+    f.querySelectorAll('[data-k]').forEach((inp) => {
+      inp.addEventListener(inp.type === 'range' ? 'input' : 'change', () => {
+        const k = inp.dataset.k;
+        const v = inp.type === 'checkbox' ? inp.checked : inp.type === 'range' ? parseFloat(inp.value) : inp.value;
+        salvar({ [k]: v });
+        const out = $('painelCorpo').querySelector(`[data-v="${k}"]`);
+        if (out) out.textContent = formatar[k](v);
+      });
+    });
+    f.querySelector('#ajPadrao').onclick = () => { restaurarPadrao(); preencher($('painelCorpo')); };
+    abrirPainel('Ajustes', f);
+    const leitura = () => {
+      const p = $('leituraSensor');
+      if (!p || $('painel').classList.contains('hidden')) return;
+      p.textContent = INCLINACAO.disponivel
+        ? `Inclinação da câmera agora: ${(INCLINACAO.elevacao * 180 / Math.PI).toFixed(1).replace('.', ',')}° (${INCLINACAO.elevacao < 0 ? 'para baixo' : 'para cima'})`
+        : 'Sensor de inclinação indisponível neste aparelho/navegador.';
+      setTimeout(leitura, 500);
+    };
+    leitura();
+  }
+  aoMudar((m) => {
+    if ('faixas' in m) mostrarFaixas(map, m.faixas);
+    if ('modeloIA' in m && state.percepcao instanceof PercepcaoIA) {
+      state.percepcao.trocarModelo(m.modeloIA).catch(() => { $('ia').textContent = 'Não foi possível carregar o modelo'; });
+    }
+  });
+  $('btnAjustes').onclick = painelAjustes;
+
+  // ---------- Navegação ----------
+  function painelNavegacao() {
+    const f = el(`
+      <form class="busca" id="formBusca"><input id="qBusca" placeholder="Para onde? (endereço, lugar…)" autocomplete="off"><button class="btn primario">Buscar</button></form>
+      <div id="resultados"></div>
+      <p class="dica">A busca usa o OpenStreetMap (Nominatim) e a rota usa o OSRM, serviços gratuitos. O texto buscado e a sua posição são enviados a eles.</p>`);
+    if (navegacao.rota) {
+      const e = el(`<div class="viagem"><div class="titulo">Rota ativa</div><p class="dica">${esc(navegacao.rota.destino.nome)}</p><button class="btn perigo" id="encerrarRota">Encerrar rota</button></div>`);
+      e.querySelector('#encerrarRota').onclick = () => { navegacao.encerrar(); fecharPainel(); };
+      f.prepend(e);
+    }
+    abrirPainel('Navegar', f);
+    const q = $('qBusca');
+    setTimeout(() => q.focus(), 50);
+    $('formBusca').onsubmit = async (ev) => {
+      ev.preventDefault();
+      const r = $('resultados');
+      if (!q.value.trim()) return;
+      r.innerHTML = '<p class="dica">Buscando…</p>';
+      try {
+        const lista = await navegacao.buscar(q.value.trim(), state.pos);
+        r.innerHTML = lista.length ? '' : '<p class="dica">Nada encontrado. Tente incluir a cidade.</p>';
+        for (const item of lista) {
+          const d = document.createElement('div');
+          d.className = 'resultado';
+          d.textContent = item.nome;
+          d.onclick = async () => {
+            if (!state.pos) { d.textContent = 'Aguardando o GPS para calcular a rota…'; return; }
+            d.textContent = 'Calculando rota…';
+            try {
+              await navegacao.iniciar(state.pos, item);
+              fecharPainel();
+              setFollow(true);
+            } catch (e) { d.textContent = '⚠️ ' + e.message; }
+          };
+          r.append(d);
+        }
+      } catch (e) { r.innerHTML = `<p class="dica">⚠️ ${esc(e.message)}</p>`; }
+    };
+  }
+  $('btnNav').onclick = painelNavegacao;
+  $('btnFimRota').onclick = () => navegacao.encerrar();
+
+  // ---------- Dashcam ----------
+  let relogioRec = null;
+  $('btnRec').onclick = () => {
+    if (!Dashcam.suportado()) { alert('Este navegador não consegue gravar vídeo da tela.'); return; }
+    if (dashcam.gravando) {
+      dashcam.parar();
+      clearInterval(relogioRec);
+      $('rec').classList.add('hidden');
+      $('btnRec').classList.remove('active');
+      return;
+    }
+    dashcam.iniciar();
+    $('btnRec').classList.add('active');
+    $('rec').classList.remove('hidden');
+    const t0 = Date.now();
+    relogioRec = setInterval(() => {
+      const s = Math.floor((Date.now() - t0) / 1000);
+      $('recTempo').textContent = String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+    }, 500);
+  };
+
+  // ---------- Histórico de viagens ----------
+  async function guardarViagem() {
+    if (!state.inicio || state.trilha.length < 2) return;
+    const duracao = (Date.now() - state.inicio) / 1000;
+    try {
+      await salvarViagem({
+        id: state.inicio, fim: Date.now(), duracao,
+        distancia: state.distancia, vmax: state.vmax,
+        media: duracao > 0 ? (state.distancia / duracao) * 3.6 : 0,
+        demo: state.modo === 'demo',
+        pontos: simplificar(state.trilha),
+      });
+    } catch (_) { /* armazenamento indisponível */ }
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') guardarViagem(); });
+  window.addEventListener('pagehide', guardarViagem);
+
+  function mostrarViagem(v) {
+    viagemVista = v;
+    const dados = { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: v ? v.pontos.map((p) => [p[0], p[1]]) : [] } };
+    if (map.getSource('viagem')) map.getSource('viagem').setData(dados);
+    else if (map.isStyleLoaded()) {
+      map.addSource('viagem', { type: 'geojson', data: dados });
+      map.addLayer({
+        id: 'viagem', type: 'line', source: 'viagem', layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#ff9f1c', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 3, 18, 10], 'line-opacity': 0.9 },
+      });
+    }
+  }
+
+  async function painelHistorico() {
+    await guardarViagem();
+    const viagens = await listarViagens().catch(() => []);
+    const km = viagens.reduce((a, v) => a + v.distancia, 0) / 1000;
+    const horas = viagens.reduce((a, v) => a + v.duracao, 0) / 3600;
+    const f = el(`
+      <div class="totais"><div><b>${viagens.length}</b>viagens</div><div><b>${km.toFixed(1).replace('.', ',')}</b>km no total</div><div><b>${horas.toFixed(1).replace('.', ',')}</b>horas</div></div>
+      ${viagemVista ? '<button class="btn" id="limparVista">Esconder viagem do mapa</button>' : ''}
+      <div id="listaViagens"></div>
+      <p class="dica">As viagens ficam salvas só neste aparelho.</p>`);
+    const lista = f.querySelector('#listaViagens');
+    if (!viagens.length) lista.append(el('<p class="dica">Nenhuma viagem ainda. Elas são salvas sozinhas enquanto você dirige.</p>'));
+    for (const v of viagens) {
+      const dur = Math.round(v.duracao / 60);
+      const item = el(`<div class="viagem">
+        <div class="titulo">${new Date(v.id).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}${v.demo ? ' · demonstração' : ''}</div>
+        <div class="numeros"><div><b>${(v.distancia / 1000).toFixed(1).replace('.', ',')}</b>km</div><div><b>${dur}</b>min</div><div><b>${Math.round(v.media)}</b>média km/h</div><div><b>${Math.round(v.vmax)}</b>máx km/h</div></div>
+        <button class="btn" data-a="ver">Ver no mapa</button><button class="btn" data-a="gpx">GPX</button><button class="btn perigo" data-a="apagar">Apagar</button>
+      </div>`);
+      const nodo = item.firstElementChild;
+      nodo.querySelector('[data-a=ver]').onclick = () => {
+        mostrarViagem(v);
+        setFollow(false);
+        const b = new maplibregl.LngLatBounds();
+        v.pontos.forEach((p) => b.extend([p[0], p[1]]));
+        map.fitBounds(b, { padding: 60, pitch: 45, maxZoom: 17 });
+        fecharPainel();
+      };
+      nodo.querySelector('[data-a=gpx]').onclick = () => baixarArquivo(gpxDaViagem(v), `viagem-${v.id}.gpx`, 'application/gpx+xml');
+      nodo.querySelector('[data-a=apagar]').onclick = async () => {
+        if (!confirm('Apagar esta viagem? Não dá para desfazer.')) return;
+        await apagarViagem(v.id);
+        if (viagemVista?.id === v.id) mostrarViagem(null);
+        painelHistorico();
+      };
+      lista.append(item);
+    }
+    abrirPainel('Histórico de viagens', f);
+    $('limparVista')?.addEventListener('click', () => { mostrarViagem(null); painelHistorico(); });
+  }
+  $('btnHist').onclick = painelHistorico;
+
+  function baixarArquivo(texto, nome, tipo) {
+    const url = URL.createObjectURL(new Blob([texto], { type: tipo }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: nome });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
 
   // Satélite de dia, mapa noturno entre 18h e 6h
   const h = new Date().getHours();

@@ -10,7 +10,7 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="icon" href="icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
-  <link rel="stylesheet" href="style.css?v=5" />
+  <link rel="stylesheet" href="style.css?v=7" />
 </head>
 <body>
   <div id="map"></div>
@@ -20,6 +20,7 @@
     <div class="speed">
       <span id="spd">0</span>
       <small>km/h</small>
+      <div id="placa" class="placa hidden" title="Limite de velocidade da via"><span id="limiteVal">60</span></div>
     </div>
     <div class="stats">
       <div><label>Distância</label><b id="dist">0,00 km</b></div>
@@ -31,6 +32,18 @@
     <div class="ia-linha"><span id="luz" class="luz hidden"></span><span id="ia">IA</span></div>
   </div>
 
+  <!-- Próxima manobra da rota -->
+  <div id="banner" class="banner hidden">
+    <div class="seta">⬆</div>
+    <div class="info"><div class="dist">–</div><div class="texto"></div><div class="resto"></div></div>
+    <button id="btnFimRota" title="Encerrar rota">✕</button>
+  </div>
+
+  <!-- Distância do carro da frente -->
+  <div id="aviso" class="aviso hidden"></div>
+  <!-- Gravação da dashcam -->
+  <div id="rec" class="rec hidden">● REC <span id="recTempo">00:00</span></div>
+
   <!-- Miniatura da câmera com as detecções da IA -->
   <div id="cam" class="hidden">
     <video id="video" playsinline muted autoplay></video>
@@ -40,11 +53,23 @@
   <!-- Botões -->
   <div id="controls" class="hidden">
     <button id="btnCenter" title="Seguir o carro">◎</button>
+    <button id="btnNav" title="Navegar até um destino">🧭</button>
     <button id="btnCam" title="Câmera / IA">📷</button>
+    <button id="btnRec" title="Gravar viagem (dashcam)">⏺</button>
+    <button id="btnTheme" title="Visual do mapa">☾</button>
     <button id="btn3d" title="Alternar 2D/3D">2D</button>
-    <button id="btnTheme" title="Dia / Noite">☾</button>
-    <button id="btnGpx" title="Exportar trajeto (GPX)">⤓</button>
+    <button id="btnHist" title="Histórico de viagens">📊</button>
+    <button id="btnAjustes" title="Ajustes e calibração">⚙</button>
+    <button id="btnGpx" title="Exportar trajeto atual (GPX)">⤓</button>
     <button id="btnFull" title="Tela cheia">⛶</button>
+  </div>
+
+  <!-- Painel (ajustes, navegação, histórico) -->
+  <div id="painel" class="painel hidden">
+    <div class="painel-card">
+      <header><h2 id="painelTitulo"></h2><button id="painelFechar" title="Fechar">✕</button></header>
+      <div id="painelCorpo" class="painel-corpo"></div>
+    </div>
   </div>
 
   <!-- Tela inicial -->
@@ -60,6 +85,6 @@
   </div>
 
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-  <script type="module" src="app.js?v=10"></script>
+  <script type="module" src="app.js?v=12"></script>
 </body>
 </html>

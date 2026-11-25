@@ -1,18 +1,20 @@
 /* Percepção por câmera: detecta veículos, pessoas e semáforos com IA no próprio celular
- * (MediaPipe Object Detector / EfficientDet-Lite0, roda no navegador, nada é enviado para servidor)
+ * (MediaPipe Object Detector / EfficientDet, roda no navegador, nada é enviado para servidor)
  * e estima onde cada um está em metros em relação ao carro.
+ * A calibração (campo de visão, altura, horizonte) fica em ajustes.js e no painel ⚙ do app.
  */
-
-// ---- Ajuste para o seu celular / suporte ----
-export const CONFIG = {
-  campoDeVisao: 66,    // graus no lado maior da imagem (câmera principal típica: 60–70°)
-  alturaCamera: 1.25,  // metros do chão até o celular no para-brisa
-  intervaloMs: 70,     // ~14 detecções por segundo
-};
+import { AJUSTES } from './ajustes.js?v=1';
+import { INCLINACAO } from './sensores.js?v=1';
 
 const VERSAO = '0.10.14';
 const CDN = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VERSAO}`;
-const MODELO = 'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite';
+// Dois modelos (licença Apache 2.0): Lite0 é leve e rápido; Lite2 erra menos (motos, bikes, objetos longe).
+const MODELOS = {
+  rapido: 'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite',
+  preciso: 'https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite2/float16/1/efficientdet_lite2.tflite',
+};
+// Intervalo entre detecções (ms) em cada situação
+const INTERVALO = { normal: 70, preciso: 110, lento: 160, bateria: 250, parado: 450 };
 
 // Classe do modelo -> tipo na cena + tamanho real aproximado (altura e comprimento em metros)
 const TIPOS = {
@@ -34,11 +36,11 @@ function misturar(a, b, t) {
   return (c[0] << 16) | (c[1] << 8) | c[2];
 }
 
-async function criarDetector() {
+async function criarDetector(nome) {
   const vision = await import(`${CDN}/vision_bundle.mjs`);
   const arquivos = await vision.FilesetResolver.forVisionTasks(`${CDN}/wasm`);
   const opcoes = (delegate) => ({
-    baseOptions: { modelAssetPath: MODELO, delegate },
+    baseOptions: { modelAssetPath: MODELOS[nome] || MODELOS.rapido, delegate },
     runningMode: 'VIDEO',
     scoreThreshold: 0.35,
     maxResults: 30,
@@ -64,6 +66,41 @@ export class PercepcaoIA {
     this.amostra = document.createElement('canvas');
     this.amostra.width = 8; this.amostra.height = 18;
     this.loop = this.loop.bind(this);
+    this.velocidade = 0;        // m/s do nosso carro (o app atualiza)
+    this.tempoDeteccao = 30;    // média de ms gastos por detecção
+    this.modo = 'normal';       // modo de economia atual (mostrado no painel)
+    this.bateria = null;
+    navigator.getBattery?.().then((b) => { this.bateria = b; }).catch(() => {});
+  }
+
+  /** Decide de quanto em quanto tempo rodar a IA (economia de bateria e aquecimento). */
+  intervalo() {
+    let modo = AJUSTES.modeloIA === 'preciso' ? 'preciso' : 'normal';
+    if (AJUSTES.economia) {
+      if (this.tempoDeteccao > 90) modo = 'lento';                       // celular não está dando conta / esquentando
+      if (this.bateria && !this.bateria.charging && this.bateria.level < 0.2) modo = 'bateria';
+      if (this.velocidade < 1) modo = 'parado';
+    }
+    this.modo = modo;
+    return INTERVALO[modo];
+  }
+
+  /** Troca entre o modelo rápido e o preciso sem parar a câmera. */
+  async trocarModelo(nome) {
+    if (!this.detector) return;
+    this.onStatus('Carregando IA…');
+    const novo = await criarDetector(nome);
+    const antigo = this.detector;
+    this.detector = novo;
+    antigo.close?.();
+    this.onStatus('IA ativa');
+  }
+
+  /** Linha do horizonte na imagem (px), pela inclinação do celular + ajuste manual. */
+  horizonte(H, f) {
+    let y = H / 2;
+    if (AJUSTES.sensorInclinacao && INCLINACAO.disponivel) y += f * Math.tan(INCLINACAO.elevacao);
+    return y + (AJUSTES.horizonteManual / 100) * H;
   }
 
   async iniciar() {
@@ -75,7 +112,7 @@ export class PercepcaoIA {
     this.video.srcObject = stream;
     await this.video.play();
     this.onStatus('Carregando IA…');
-    this.detector = await criarDetector();
+    this.detector = await criarDetector(AJUSTES.modeloIA);
     this.onStatus('IA ativa');
     this.ativo = true;
     requestAnimationFrame(this.loop);
@@ -83,10 +120,12 @@ export class PercepcaoIA {
 
   loop(agora) {
     if (!this.ativo) return;
-    if (agora - this.ultimo >= CONFIG.intervaloMs && this.video.readyState >= 2) {
+    if (agora - this.ultimo >= this.intervalo() && this.video.readyState >= 2) {
       const dt = agora - this.ultimo;
       this.ultimo = agora;
+      const t0 = performance.now();
       const r = this.detector.detectForVideo(this.video, agora);
+      this.tempoDeteccao = this.tempoDeteccao * 0.9 + (performance.now() - t0) * 0.1;
       this.fps = this.fps * 0.9 + (1000 / dt) * 0.1;
       const medidas = this.medir(r.detections);
       this.rastrear(medidas, agora);
@@ -98,8 +137,10 @@ export class PercepcaoIA {
   /** Converte cada caixa da imagem em posição no chão: x (direita) e z (frente), em metros. */
   medir(deteccoes) {
     const W = this.video.videoWidth, H = this.video.videoHeight;
-    const f = (Math.max(W, H) / 2) / Math.tan((CONFIG.campoDeVisao * Math.PI) / 360); // distância focal em pixels
-    const cx = W / 2, cy = H / 2; // supõe celular nivelado: horizonte no meio da imagem
+    const f = (Math.max(W, H) / 2) / Math.tan((AJUSTES.campoDeVisao * Math.PI) / 360); // distância focal em pixels
+    const cx = W / 2;
+    const cy = this.horizonte(H, f); // linha do horizonte (corrigida pela inclinação e calibração)
+    this.horizonteY = cy;
     const out = [];
     for (const d of deteccoes) {
       const cat = d.categories[0];
@@ -112,7 +153,7 @@ export class PercepcaoIA {
       // 1) Pelo tamanho: objeto de altura conhecida
       const zTam = cortado ? null : (f * info.h) / b.height;
       // 2) Pelo chão: quanto mais abaixo do horizonte, mais perto
-      const zChao = info.chao && base - cy > 6 && base < H - 3 ? (f * CONFIG.alturaCamera) / (base - cy) : null;
+      const zChao = info.chao && base - cy > 6 && base < H - 3 ? (f * AJUSTES.alturaCamera) / (base - cy) : null;
       let z = zTam && zChao ? (zTam + zChao) / 2 : zTam || zChao;
       if (!z) continue;
       z = Math.min(Math.max(z, 2), 120);
@@ -175,8 +216,12 @@ export class PercepcaoIA {
       }
       if (melhor) {
         livres.delete(melhor);
+        const zAntes = melhor.z;
         melhor.x += (m.x - melhor.x) * 0.4;
         melhor.z += (m.z - melhor.z) * 0.4;
+        // velocidade relativa (m/s): negativa = está se aproximando
+        const dts = (agora - melhor.visto) / 1000;
+        if (dts > 0) melhor.vz = (melhor.vz ?? 0) * 0.7 + ((melhor.z - zAntes) / dts) * 0.3;
         melhor.cor = m.cor ?? melhor.cor;
         if (m.pintura != null) melhor.pintura = misturar(melhor.pintura ?? m.pintura, m.pintura, 0.3);
         melhor.visto = agora;
@@ -197,6 +242,14 @@ export class PercepcaoIA {
     ctx.clearRect(0, 0, W, H);
     ctx.lineWidth = Math.max(2, W / 320);
     ctx.font = `bold ${Math.round(W / 40)}px system-ui, sans-serif`;
+    // Linha do horizonte: deve coincidir com o fim da rua lá longe (use o ⚙ para calibrar)
+    if (this.horizonteY != null) {
+      ctx.save();
+      ctx.setLineDash([W / 60, W / 90]);
+      ctx.strokeStyle = 'rgba(0, 229, 255, 0.85)';
+      ctx.beginPath(); ctx.moveTo(0, this.horizonteY); ctx.lineTo(W, this.horizonteY); ctx.stroke();
+      ctx.restore();
+    }
     for (const m of medidas) {
       const b = m.caixa;
       const cor = m.tipo === 'pessoa' || m.tipo === 'bike' || m.tipo === 'moto' ? '#ffb020' : m.tipo === 'semaforo' ? '#34d17a' : '#5aa0ff';
@@ -234,15 +287,15 @@ export class TrafegoSimulado {
     let id = 0;
     const add = (tipo, x, z, vRel = 0, extra = {}) => this.lista.push({ id: 'sim' + id++, tipo, x, z, vRel, ...extra });
     // Faixas: esquerda (-3.5), a nossa (0), direita (3.5). Calçadas em ±8.
-    add('carro', 0, 14, 0.4);
+    add('carro', 0, 30, 0.4);
     add('carro', -3.5, 6, 1.5);
     add('carro', -3.5, 26, -0.8);
     add('onibus', 3.5, 22, -0.5);
     add('carro', 3.5, -9, 1.2);
     add('carro', 0, -12, 0.3);
     add('caminhao', -3.5, 48, -0.3);
-    add('carro', 0, 38, -0.2);
-    add('moto', -1.8, 4, 2.5);
+    add('carro', 0, 52, -0.2);
+    add('moto', -2.2, 4, 2.5);
     add('bike', 6, 18, null);
     for (let i = 0; i < 7; i++) add('pessoa', (i % 2 ? 1 : -1) * (8 + Math.random()), 6 + i * 11, null);
     add('semaforo', 6.5, 70, null, { cor: 'verde' });
@@ -257,6 +310,7 @@ export class TrafegoSimulado {
       // vRel = velocidade em relação ao nosso carro; null = parado/devagar no mundo
       const v = o.vRel != null ? o.vRel + Math.sin(agora / 3000 + o.z) * 0.3 : o.tipo === 'bike' ? 4 - this.velocidade : (o.tipo === 'pessoa' ? 1.2 : 0) - this.velocidade;
       o.z += v * dt;
+      o.vz = v;
       if (o.z < -25) o.z = 60 + Math.random() * 40;
       if (o.z > 100) o.z = -20;
       if (o.tipo === 'semaforo') {

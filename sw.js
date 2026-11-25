@@ -1,7 +1,7 @@
 // Service worker: guarda os arquivos do app e os pedaços de mapa já vistos (ajuda quando o sinal cai).
-const APP = 'mapa3d-app-v5';
+const APP = 'mapa3d-app-v6';
 const TILES = 'mapa3d-tiles-v1';
-const ARQUIVOS = ['./', 'index.html', 'style.css', 'app.js', 'cena3d.js', 'ia.js', 'icon.svg', 'manifest.webmanifest'];
+const ARQUIVOS = ['./', 'index.html', 'style.css', 'app.js', 'cena3d.js', 'ia.js', 'ajustes.js', 'sensores.js', 'faixas.js', 'aviso.js', 'navegacao.js', 'limite.js', 'dashcam.js', 'historico.js', 'icon.svg', 'manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(APP).then((c) => c.addAll(ARQUIVOS)));
