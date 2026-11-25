@@ -4,6 +4,16 @@ App web que reconstrói em **3D e em tempo real** o trânsito ao redor do carro,
 
 Funciona no navegador do celular (Android e iPhone). Não precisa instalar nada nem criar chave de API.
 
+### ▶️ [Abrir o app](https://sergiorsantana.github.io/mapa3d-carro/)
+
+![App rodando em tempo real: carro andando pela Av. Paulista com trânsito em 3D sobre imagem de satélite](docs/demo.gif)
+
+*Rodando em tempo real no modo demonstração, na Av. Paulista (SP): o trânsito em 3D (carros, ônibus, caminhão, moto, pedestres e semáforo) sobre a imagem de satélite, com os prédios coloridos por altura.*
+
+| Satélite | Noturno |
+|---|---|
+| ![Visual satélite](docs/satelite.jpg) | ![Visual noturno](docs/noite.jpg) |
+
 ## Funcionalidades
 
 ### IA na câmera
